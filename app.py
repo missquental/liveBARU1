@@ -4,6 +4,7 @@ import os
 import subprocess
 import threading
 import queue
+import time
 from pathlib import Path
 import streamlit.components.v1 as components
 
@@ -27,63 +28,78 @@ def download_drive_folder():
     )
 
 # ===============================
-# FFMPEG THREAD (JANGAN SENTUH STREAMLIT DI SINI)
+# AUTO PLAYLIST STREAM
 # ===============================
-def run_ffmpeg(video_path, stream_key, is_shorts, log_queue):
+def stream_playlist(video_dir, stream_key, is_shorts, log_queue, stop_flag):
     rtmp_url = f"rtmp://a.rtmp.youtube.com/live2/{stream_key}"
-
     scale = ["-vf", "scale=720:1280"] if is_shorts else []
 
-    cmd = [
-        "ffmpeg",
-        "-re",
-        "-stream_loop", "-1",
-        "-i", video_path,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-b:v", "2500k",
-        "-maxrate", "2500k",
-        "-bufsize", "5000k",
-        "-g", "60",
-        "-keyint_min", "60",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-f", "flv",
-        *scale,
-        rtmp_url
-    ]
+    while not stop_flag.is_set():
+        videos = sorted([
+            f for f in os.listdir(video_dir)
+            if f.lower().endswith((".mp4", ".flv"))
+        ])
 
-    log_queue.put("CMD: " + " ".join(cmd))
+        if not videos:
+            log_queue.put("❌ Tidak ada video di folder")
+            time.sleep(5)
+            continue
 
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True
-        )
+        for video in videos:
+            if stop_flag.is_set():
+                break
 
-        for line in process.stdout:
-            log_queue.put(line.strip())
+            video_path = os.path.join(video_dir, video)
+            log_queue.put(f"▶️ Memutar: {video}")
 
-    except Exception as e:
-        log_queue.put(f"ERROR: {e}")
+            cmd = [
+                "ffmpeg",
+                "-re",
+                "-i", video_path,
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-b:v", "2500k",
+                "-maxrate", "2500k",
+                "-bufsize", "5000k",
+                "-g", "60",
+                "-keyint_min", "60",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-f", "flv",
+                *scale,
+                rtmp_url
+            ]
+
+            log_queue.put("CMD: " + " ".join(cmd))
+
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+
+            for line in process.stdout:
+                if stop_flag.is_set():
+                    process.kill()
+                    break
+                log_queue.put(line.strip())
+
+            process.wait()
+            log_queue.put(f"✅ Selesai: {video}")
+
+        log_queue.put("🔁 Playlist selesai, mengulang dari awal")
 
 # ===============================
-# STREAMLIT UI (MAIN THREAD)
+# STREAMLIT UI
 # ===============================
-st.set_page_config(
-    page_title="Drive → Live YouTube",
-    page_icon="📡",
-    layout="wide"
-)
-
-st.title("📡 Google Drive → Live YouTube")
+st.set_page_config("Drive → Live YouTube", "📡", layout="wide")
+st.title("📡 Google Drive → Live YouTube (Auto Playlist)")
 
 # ===============================
-# IKLAN (OPSIONAL)
+# IKLAN OPSIONAL
 # ===============================
-if st.checkbox("Tampilkan Iklan", value=True):
+if st.checkbox("Tampilkan Iklan", True):
     components.html(
         """
         <div style="padding:15px;background:#f0f2f6;border-radius:10px;text-align:center">
@@ -97,7 +113,7 @@ if st.checkbox("Tampilkan Iklan", value=True):
     )
 
 # ===============================
-# SESSION STATE INIT
+# SESSION STATE
 # ===============================
 if "log_queue" not in st.session_state:
     st.session_state.log_queue = queue.Queue()
@@ -105,77 +121,80 @@ if "log_queue" not in st.session_state:
 if "logs" not in st.session_state:
     st.session_state.logs = []
 
-# ===============================
-# DOWNLOAD SECTION
-# ===============================
-st.subheader("📥 Ambil Video dari Google Drive")
+if "stop_flag" not in st.session_state:
+    st.session_state.stop_flag = threading.Event()
 
-if st.button("Download Video"):
-    with st.spinner("Mengunduh dari Google Drive..."):
+# ===============================
+# DOWNLOAD
+# ===============================
+st.subheader("📥 Download Video")
+
+if st.button("Download dari Google Drive"):
+    with st.spinner("Mengunduh..."):
         download_drive_folder()
     st.success("Download selesai")
 
 # ===============================
-# LIST VIDEO
+# VIDEO LIST
 # ===============================
-st.subheader("🎬 Video Tersedia")
+st.subheader("🎬 Video Playlist")
 
 videos = sorted([
     f for f in os.listdir(VIDEO_DIR)
     if f.lower().endswith((".mp4", ".flv"))
 ])
 
-video_path = None
-
 if videos:
-    selected = st.selectbox("Pilih Video", videos)
-    video_path = os.path.join(VIDEO_DIR, selected)
-    st.video(video_path)
+    st.write(videos)
 else:
     st.warning("Belum ada video")
 
 # ===============================
 # STREAM SETTING
 # ===============================
-st.subheader("🔴 Live Streaming YouTube")
+st.subheader("🔴 Live Setting")
 
 stream_key = st.text_input("Stream Key YouTube", type="password")
-is_shorts = st.checkbox("Mode Shorts (9:16 / 720x1280)")
+is_shorts = st.checkbox("Mode Shorts (9:16)")
 
 # ===============================
-# BUTTON CONTROL
+# CONTROL BUTTON
 # ===============================
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("🚀 Mulai Live"):
-        if not video_path or not stream_key:
-            st.error("Video & Stream Key wajib diisi")
+    if st.button("🚀 Mulai Auto Live"):
+        if not stream_key:
+            st.error("Stream Key wajib diisi")
         else:
+            st.session_state.stop_flag.clear()
             threading.Thread(
-                target=run_ffmpeg,
+                target=stream_playlist,
                 args=(
-                    video_path,
+                    VIDEO_DIR,
                     stream_key,
                     is_shorts,
-                    st.session_state.log_queue
+                    st.session_state.log_queue,
+                    st.session_state.stop_flag
                 ),
                 daemon=True
             ).start()
-            st.success("Streaming dimulai")
+            st.success("Auto playlist live dimulai")
 
 with col2:
     if st.button("🛑 Stop Live"):
+        st.session_state.stop_flag.set()
         os.system("pkill ffmpeg")
-        st.warning("Streaming dihentikan")
+        st.warning("Live dihentikan")
 
 # ===============================
-# LOG OUTPUT (AMAN)
+# LOG OUTPUT
 # ===============================
 log_box = st.empty()
 
 while not st.session_state.log_queue.empty():
-    msg = st.session_state.log_queue.get()
-    st.session_state.logs.append(msg)
+    st.session_state.logs.append(
+        st.session_state.log_queue.get()
+    )
 
-log_box.text("\n".join(st.session_state.logs[-15:]))
+log_box.text("\n".join(st.session_state.logs[-20:]))
