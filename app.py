@@ -1,20 +1,18 @@
-import sys
+import os
 import subprocess
 import threading
-import os
-import re
-import requests
-import gdown
 import streamlit as st
 import streamlit.components.v1 as components
+import gdown
+import requests
+from bs4 import BeautifulSoup
 
-# ================= FFMPEG STREAM =================
+# ================= FFMPEG =================
 def run_ffmpeg(video_path, stream_key, is_shorts, log_callback):
     output_url = f"rtmp://a.rtmp.youtube.com/live2/{stream_key}"
 
     cmd = [
-        "ffmpeg", "-re",
-        "-stream_loop", "-1",
+        "ffmpeg", "-re", "-stream_loop", "-1",
         "-i", video_path,
         "-c:v", "libx264",
         "-preset", "veryfast",
@@ -33,29 +31,37 @@ def run_ffmpeg(video_path, stream_key, is_shorts, log_callback):
 
     log_callback(" ".join(cmd))
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
+    p = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
     )
 
-    for line in process.stdout:
+    for line in p.stdout:
         log_callback(line.strip())
 
-# ================= GOOGLE DRIVE PUBLIC =================
+# ================= DRIVE PUBLIC (WORKING) =================
 def list_public_drive_videos(folder_id):
     url = f"https://drive.google.com/drive/folders/{folder_id}"
-    html = requests.get(url).text
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
 
-    files = []
-    matches = re.findall(r'"([a-zA-Z0-9_-]{33})","([^"]+)"', html)
+    r = requests.get(url, headers=headers)
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    for file_id, name in matches:
-        if name.lower().endswith((".mp4", ".flv", ".mkv", ".mov")):
-            files.append({"id": file_id, "name": name})
+    videos = []
 
-    return files
+    for a in soup.select("a"):
+        href = a.get("href", "")
+        name = a.text.strip()
+
+        if "/file/d/" in href and name.lower().endswith((".mp4", ".mkv", ".mov", ".flv")):
+            file_id = href.split("/file/d/")[1].split("/")[0]
+            videos.append({
+                "id": file_id,
+                "name": name
+            })
+
+    return videos
 
 # ================= UI =================
 def main():
@@ -67,7 +73,7 @@ def main():
 
     st.title("📡 Live Streaming YouTube (Google Drive Public Folder)")
 
-    # ===== ADS (OPSIONAL) =====
+    # ===== ADS =====
     if st.checkbox("Tampilkan Iklan", True):
         components.html("""
         <div style="padding:20px;text-align:center">
@@ -75,7 +81,7 @@ def main():
         </div>
         """, height=250)
 
-    # ===== GOOGLE DRIVE INPUT =====
+    # ===== DRIVE INPUT =====
     st.subheader("📂 Google Drive Folder")
 
     folder_input = st.text_input(
@@ -84,18 +90,17 @@ def main():
     )
 
     if not folder_input:
-        st.warning("Masukkan Folder Google Drive (PUBLIC)")
         st.stop()
 
     folder_id = folder_input.rstrip("/").split("/")[-1]
 
-    # ===== LOAD VIDEO LIST =====
+    # ===== LOAD VIDEO =====
     if "drive_videos" not in st.session_state or st.button("🔄 Refresh Video"):
         with st.spinner("Mengambil video dari Google Drive..."):
             st.session_state.drive_videos = list_public_drive_videos(folder_id)
 
     if not st.session_state.drive_videos:
-        st.error("Tidak ada video (pastikan folder PUBLIC)")
+        st.error("❌ Tidak ada video (pastikan file video langsung di folder, bukan subfolder)")
         st.stop()
 
     video_map = {v["name"]: v["id"] for v in st.session_state.drive_videos}
@@ -116,7 +121,7 @@ def main():
         logs.append(msg)
         log_box.text("\n".join(logs[-20:]))
 
-    # ===== START STREAM =====
+    # ===== START =====
     if st.button("🚀 Jalankan Streaming"):
         if not stream_key:
             st.error("Stream Key wajib diisi")
@@ -126,7 +131,7 @@ def main():
         local_file = f"drive_{selected_video}"
 
         if not os.path.exists(local_file):
-            with st.spinner("Download video dari Google Drive..."):
+            with st.spinner("Download video..."):
                 gdown.download(
                     f"https://drive.google.com/uc?id={file_id}",
                     local_file,
@@ -139,9 +144,8 @@ def main():
             daemon=True
         ).start()
 
-        st.success("Streaming dimulai!")
+        st.success("🚀 Streaming dimulai")
 
-    # ===== STOP STREAM =====
     if st.button("🛑 Stop Streaming"):
         os.system("pkill ffmpeg")
         st.warning("Streaming dihentikan")
