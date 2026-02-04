@@ -11,7 +11,7 @@ from googleapiclient.http import MediaIoBaseDownload
 import io
 
 # ================= CONFIG =================
-FOLDER_ID = "ISI_FOLDER_ID_DRIVE_KAMU"
+FOLDER_ID = "https://drive.google.com/drive/folders/16usNQpHCf0gVMiu7khNbj7K48QhOVkFU"
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 # ================= GOOGLE DRIVE =================
