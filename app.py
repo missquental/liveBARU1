@@ -1,70 +1,51 @@
 import streamlit as st
 import os
 import re
-import requests
-import gdown
 import subprocess
 import threading
-import time
-import stat
+import requests
+import gdown
 
-# ===============================
-# CONFIG
-# ===============================
-st.set_page_config(page_title="Drive → Live Stream", layout="wide")
-FFMPEG_PATH = "./ffmpeg"
+st.set_page_config(page_title="Drive → YouTube Live", layout="wide")
+
 DOWNLOAD_DIR = "videos"
-
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 # ===============================
-# SETUP FFMPEG (STATIC)
-# ===============================
-def setup_ffmpeg():
-    if os.path.exists(FFMPEG_PATH):
-        return
-
-    with st.spinner("Menyiapkan ffmpeg..."):
-        url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
-        subprocess.run(["wget", "-q", url, "-O", "ffmpeg.tar.xz"])
-        subprocess.run(["tar", "-xf", "ffmpeg.tar.xz"])
-
-        folder = next(f for f in os.listdir(".") if f.startswith("ffmpeg-"))
-        os.rename(f"{folder}/ffmpeg", "ffmpeg")
-
-        os.chmod("ffmpeg", os.stat("ffmpeg").st_mode | stat.S_IEXEC)
-
-# ===============================
-# LIST VIDEO PUBLIC DRIVE
+# AMBIL VIDEO DARI DRIVE PUBLIC
 # ===============================
 def list_public_drive_videos(folder_id):
     url = f"https://drive.google.com/drive/folders/{folder_id}"
     html = requests.get(url).text
 
-    files = []
+    videos = []
     matches = re.findall(r'"([a-zA-Z0-9_-]{33})","([^"]+)"', html)
 
     for file_id, name in matches:
         if name.lower().endswith((".mp4", ".mkv", ".mov", ".flv")):
-            files.append({"id": file_id, "name": name})
+            videos.append({"id": file_id, "name": name})
 
-    return files
+    return videos
 
 # ===============================
 # DOWNLOAD VIDEO
 # ===============================
-def download_video(file_id, name):
-    path = os.path.join(DOWNLOAD_DIR, name)
+def download_video(file_id, filename):
+    path = os.path.join(DOWNLOAD_DIR, filename)
     if not os.path.exists(path):
-        gdown.download(f"https://drive.google.com/uc?id={file_id}", path, quiet=False)
+        gdown.download(
+            f"https://drive.google.com/uc?id={file_id}",
+            path,
+            quiet=False
+        )
     return path
 
 # ===============================
-# FFMPEG RUNNER (NO STREAMLIT CALL)
+# FFMPEG (TANPA STREAMLIT UI)
 # ===============================
 def run_ffmpeg(video_path, rtmp_url):
     cmd = [
-        FFMPEG_PATH,
+        "ffmpeg",
         "-re",
         "-stream_loop", "-1",
         "-i", video_path,
@@ -79,17 +60,14 @@ def run_ffmpeg(video_path, rtmp_url):
         "-f", "flv",
         rtmp_url
     ]
-
     subprocess.Popen(cmd)
 
 # ===============================
 # UI
 # ===============================
 def main():
-    setup_ffmpeg()
-
     st.title("📡 Google Drive → YouTube Live")
-    st.caption("Folder Drive PUBLIC | Tanpa Secret | Siap Live")
+    st.caption("Drive PUBLIC | Tanpa Secret | Streamlit Cloud Ready")
 
     folder_input = st.text_input(
         "Google Drive Folder URL / ID",
@@ -106,14 +84,14 @@ def main():
 
     folder_id = folder_input.split("/")[-1]
 
-    if st.button("🔄 Refresh Video"):
+    if st.button("🔄 Load Video"):
         st.session_state.videos = list_public_drive_videos(folder_id)
 
     if "videos" not in st.session_state:
         st.session_state.videos = list_public_drive_videos(folder_id)
 
     if not st.session_state.videos:
-        st.error("Tidak ada video (pastikan folder PUBLIC)")
+        st.error("❌ Tidak ada video — pastikan folder PUBLIC (Viewer)")
         st.stop()
 
     video_map = {v["name"]: v["id"] for v in st.session_state.videos}
@@ -124,19 +102,18 @@ def main():
 
     with col1:
         if st.button("▶️ START LIVE"):
-            path = download_video(video_map[selected], selected)
+            video_path = download_video(video_map[selected], selected)
             threading.Thread(
                 target=run_ffmpeg,
-                args=(path, rtmp_url),
+                args=(video_path, rtmp_url),
                 daemon=True
             ).start()
-            st.success("Live streaming dimulai")
+            st.success("✅ Streaming dimulai (tunggu ±20 detik)")
 
     with col2:
         if st.button("⛔ STOP LIVE"):
-            os.system("pkill -f ./ffmpeg")
-            st.warning("Live dihentikan")
+            os.system("pkill ffmpeg")
+            st.warning("⛔ Streaming dihentikan")
 
-# ===============================
 if __name__ == "__main__":
     main()
